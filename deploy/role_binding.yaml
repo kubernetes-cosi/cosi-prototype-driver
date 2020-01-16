@@ -1,0 +1,11 @@
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: cosi-prototype-driver
+subjects:
+- kind: ServiceAccount
+  name: cosi-prototype-driver
+roleRef:
+  kind: Role
+  name: cosi-prototype-driver
+  apiGroup: rbac.authorization.k8s.io

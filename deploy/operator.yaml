@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cosi-prototype-driver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: cosi-prototype-driver
+  template:
+    metadata:
+      labels:
+        name: cosi-prototype-driver
+    spec:
+      serviceAccountName: cosi-prototype-driver
+      containers:
+        - name: cosi-prototype-driver
+          # Replace this with the built image name
+          image: REPLACE_IMAGE
+          command:
+          - cosi-prototype-driver
+          imagePullPolicy: Always
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "cosi-prototype-driver"
