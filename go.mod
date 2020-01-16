@@ -6,6 +6,7 @@ require (
 	github.com/kube-object-storage/lib-bucket-provisioner v0.0.0-20200107223247-51020689f1fb
 	github.com/operator-framework/operator-sdk v0.14.0
 	github.com/spf13/pflag v1.0.5
+	github.com/yard-turkey/cosi-prototype-interface v0.0.0
 	k8s.io/api v0.0.0
 	k8s.io/apimachinery v0.0.0
 	k8s.io/client-go v12.0.0+incompatible
@@ -38,3 +39,5 @@ replace (
 )
 
 replace github.com/docker/docker => github.com/moby/moby v0.7.3-0.20190826074503-38ab9da00309 // Required by Helm
+
+replace github.com/yard-turkey/cosi-prototype-interface => /Users/jcope/Workspace/cosi-prototype/cosi-prototype-interface
