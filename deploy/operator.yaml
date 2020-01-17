@@ -16,10 +16,10 @@ spec:
       containers:
         - name: cosi-prototype-driver
           # Replace this with the built image name
-          image: REPLACE_IMAGE
+          image: jcoperh/driver
           command:
           - cosi-prototype-driver
-          imagePullPolicy: Always
+          imagePullPolicy: Never
           env:
             - name: WATCH_NAMESPACE
               valueFrom:

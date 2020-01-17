@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	env_listen                = "COSI_SERVER_LISTEN"
-	env_listen_default        = "localhost:8080"
+	env_listen         = "COSI_SERVER_LISTEN"
+	env_listen_default = "localhost:8080"
 )
 
 // grpcClient Singleton. Wraps grpc connection channel and the Provisioner client
@@ -20,7 +20,6 @@ var grpcClient = struct {
 	cosi.ProvisionerClient
 	*grpc.ClientConn
 }{}
-
 
 func init() {
 	listen := env_listen_default

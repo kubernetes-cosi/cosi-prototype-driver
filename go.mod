@@ -3,10 +3,12 @@ module github.com/yard-turkey/cosi-prototype-driver
 go 1.13
 
 require (
+	github.com/google/uuid v1.1.1
 	github.com/kube-object-storage/lib-bucket-provisioner v0.0.0-20200107223247-51020689f1fb
 	github.com/operator-framework/operator-sdk v0.14.0
 	github.com/spf13/pflag v1.0.5
 	github.com/yard-turkey/cosi-prototype-interface v0.0.0
+	google.golang.org/grpc v1.26.0
 	k8s.io/api v0.0.0
 	k8s.io/apimachinery v0.0.0
 	k8s.io/client-go v12.0.0+incompatible
