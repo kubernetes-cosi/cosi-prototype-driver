@@ -1,14 +1,16 @@
 package objectbucketclaim
 
 import (
+	"context"
 	"github.com/yard-turkey/cosi-prototype-interface/cosi"
 	"google.golang.org/grpc"
 	"os"
+	"time"
 )
 
 const (
-	env_listen         = "COSI_SERVER_LISTEN"
-	env_listen_default = "localhost:8080"
+	ENV_LISTEN         = "COSI_GRPC_LISTEN"
+	ENV_LISTEN_DEFAULT = "localhost:8080"
 )
 
 // grpcClient Singleton. Wraps grpc connection channel and the Provisioner client
@@ -22,11 +24,13 @@ var grpcClient = struct {
 }{}
 
 func init() {
-	listen := env_listen_default
-	if l, ok := os.LookupEnv(env_listen); ok {
+	listen := ENV_LISTEN_DEFAULT
+	if l, ok := os.LookupEnv(ENV_LISTEN); ok {
 		listen = l
 	}
-	conn, err := grpc.Dial(listen)
+	// TODO (copejon) I think this will work to prevent server startup races
+	ctx, _ := context.WithTimeout(context.Background(), 30 * time.Second)
+	conn, err := grpc.DialContext(ctx, listen)
 	if err != nil {
 		panic(err)
 	}

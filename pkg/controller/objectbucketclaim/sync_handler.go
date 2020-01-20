@@ -2,6 +2,8 @@ package objectbucketclaim
 
 import (
 	"fmt"
+
+	// TODO (copejon) move or generate the kube-object-storage packages in this project
 	"github.com/kube-object-storage/lib-bucket-provisioner/pkg/apis/objectbucket.io/v1alpha1"
 	"github.com/kube-object-storage/lib-bucket-provisioner/pkg/client/clientset/versioned"
 	"github.com/kube-object-storage/lib-bucket-provisioner/pkg/provisioner/api"
@@ -23,69 +25,6 @@ type obcController struct {
 	provisionerLabels map[string]string
 	provisioner       api.Provisioner
 	provisionerName   string
-}
-
-// Reconcile implements the Reconciler interface. This function contains the business logic
-// of the OBC obcController.
-// Note: the obc obtained from the key is not expected to be nil. In other words, this func is
-//   not called when informers detect an object is missing and trigger a formal delete event.
-//   Instead, delete is indicated by the deletionTimestamp being non-nil on an update event.
-func (c *obcController) syncHandler(key string) error {
-
-	obc, err := claimForKey(key, c.libClientset)
-	if err != nil {
-		//      The OBC was deleted immediately after creation, before it could be processed by
-		//      handleProvisionClaim.  As a finalizer is immediately applied to the OBC before processing,
-		//      if it does not have a finalizer, it was not processed, and no artifacts were created.
-		//      Therefore, it is safe to assume nothing needs to be done.
-		if errors.IsNotFound(err) {
-			log.Info("OBC vanished, assuming it was deleted")
-			return nil
-		}
-		return fmt.Errorf("could not sync OBC %s: %v", key, err)
-	}
-
-	class, err := storageClassForClaim(c.clientset, obc)
-	if err != nil {
-		return err
-	}
-	if !c.supportedProvisioner(class.Provisioner) {
-		log.Info("unsupported provisioner", "got", class.Provisioner)
-		return nil
-	}
-
-	// ***********************
-	// Delete or Revoke Bucket
-	// ***********************
-	if obc.ObjectMeta.DeletionTimestamp != nil {
-		log.Info("OBC deleted, proceeding with cleanup")
-		return c.handleDeleteClaim(key, obc)
-	}
-
-	// *******************************************************
-	// Provision New Bucket or Grant Access to Existing Bucket
-	// *******************************************************
-	if !shouldProvision(obc) {
-		log.Info("skipping provision")
-		return nil
-	}
-
-	// update the OBC's status to pending before any provisioning related errors can occur
-	obc, err = updateObjectBucketClaimPhase(
-		c.libClientset,
-		obc,
-		v1alpha1.ObjectBucketClaimStatusPhasePending,
-		defaultRetryBaseInterval,
-		defaultRetryTimeout)
-	if err != nil {
-		return fmt.Errorf("error updating OBC status: %s", err)
-	}
-
-	// By now, we should know that the OBC matches our provisioner, lacks an OB, and thus requires provisioning
-	err = c.handleProvisionClaim(key, obc, class)
-
-	// If handleReconcile() errors, the request will be re-queued.  In the distant future, we will likely want some ignorable error types in order to skip re-queuing
-	return err
 }
 
 // handleProvision is an extraction of the core provisioning process in order to defer clean up
@@ -145,13 +84,13 @@ func (c *obcController) handleProvisionClaim(key string, obc *v1alpha1.ObjectBuc
 	}
 
 	// Re-Get the claim in order to shorten the race condition where the claim was deleted after Reconcile() started
-	obc, err = claimForKey(key, c.libClientset)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return fmt.Errorf("OBC was lost before we could provision: %v", err)
-		}
-		return err
-	}
+	//obc, err = claimForKey(key, c.libClientset)
+	//if err != nil {
+	//	if errors.IsNotFound(err) {
+	//		return fmt.Errorf("OBC was lost before we could provision: %v", err)
+	//	}
+	//	return err
+	//}
 
 	options := &api.BucketOptions{
 		ReclaimPolicy:     class.ReclaimPolicy,
@@ -204,7 +143,7 @@ func (c *obcController) handleProvisionClaim(key string, obc *v1alpha1.ObjectBuc
 	//   spec.Authentication is lost after create/update, which break secret creation
 	setObjectBucketName(ob, key)
 	ob.Spec.StorageClassName = obc.Spec.StorageClassName
-	ob.Spec.ClaimRef, err = claimRefForKey(key, c.libClientset)
+	//ob.Spec.ClaimRef, err = claimRefForKey(key, c.libClientset)
 	ob.Spec.ReclaimPolicy = options.ReclaimPolicy
 	ob.SetFinalizers([]string{finalizer})
 	ob.SetLabels(c.provisionerLabels)
@@ -297,10 +236,6 @@ func (c *obcController) handleDeleteClaim(key string, obc *v1alpha1.ObjectBucket
 	}
 
 	return c.deleteResources(ob, cm, secret, obc)
-}
-
-func (c *obcController) supportedProvisioner(provisioner string) bool {
-	return provisioner == c.provisionerName
 }
 
 // trim the errors resulting from objects not being found

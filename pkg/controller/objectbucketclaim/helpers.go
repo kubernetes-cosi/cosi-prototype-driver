@@ -18,6 +18,7 @@ package objectbucketclaim
 
 import (
 	"fmt"
+
 	"strings"
 
 	"github.com/google/uuid"
@@ -29,8 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/kube-object-storage/lib-bucket-provisioner/pkg/apis/objectbucket.io/v1alpha1"
-	"github.com/kube-object-storage/lib-bucket-provisioner/pkg/client/clientset/versioned"
+	v1alpha1 "github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
 )
 
 func makeObjectReference(claim *v1alpha1.ObjectBucketClaim) *corev1.ObjectReference {
@@ -66,24 +66,6 @@ func shouldProvision(obc *v1alpha1.ObjectBucketClaim) bool {
 		return false
 	}
 	return true
-}
-
-func claimRefForKey(key string, c versioned.Interface) (*corev1.ObjectReference, error) {
-	claim, err := claimForKey(key, c)
-	if err != nil {
-		return nil, err
-	}
-	return makeObjectReference(claim), nil
-}
-
-func claimForKey(key string, c versioned.Interface) (obc *v1alpha1.ObjectBucketClaim, err error) {
-	log.Info("getting claim for key")
-
-	ns, name, err := cache.SplitMetaNamespaceKey(key)
-	if err != nil {
-		return nil, err
-	}
-	return c.ObjectbucketV1alpha1().ObjectBucketClaims(ns).Get(name, metav1.GetOptions{})
 }
 
 // Return true if this storage class is for a new bucket vs an existing bucket.

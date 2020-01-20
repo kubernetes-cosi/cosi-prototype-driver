@@ -16,7 +16,7 @@ spec:
       containers:
         - name: cosi-prototype-driver
           # Replace this with the built image name
-          image: jcoperh/driver
+          image: jcoperh/cosi
           command:
           - cosi-prototype-driver
           imagePullPolicy: Never

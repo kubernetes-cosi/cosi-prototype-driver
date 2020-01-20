@@ -2,16 +2,15 @@ package objectbucketclaim
 
 import (
 	"context"
+	"github.com/yard-turkey/cosi-prototype-interface/cosi"
+	storagev1 "k8s.io/api/storage/v1"
 
 	objectbucketiov1alpha1 "github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -68,6 +67,7 @@ type ReconcileObjectBucketClaim struct {
 	// that reads objects from the cache and writes to the apiserver
 	client client.Client
 	scheme *runtime.Scheme
+	pluginName string
 }
 
 // Reconcile reads that state of the cluster for a ObjectBucketClaim object and makes changes based on the state read
@@ -95,54 +95,68 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 		return reconcile.Result{}, err
 	}
 
-	// Define a new Pod object
-	pod := newPodForCR(instance)
+	err = r.syncHandler(instance)
 
-	// Set ObjectBucketClaim instance as the owner and controller
-	if err := controllerutil.SetControllerReference(instance, pod, r.scheme); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// Check if this Pod already exists
-	found := &corev1.Pod{}
-	err = r.client.Get(context.TODO(), types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, found)
-	if err != nil && errors.IsNotFound(err) {
-		reqLogger.Info("Creating a new Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
-		err = r.client.Create(context.TODO(), pod)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-
-		// Pod created successfully - don't requeue
-		return reconcile.Result{}, nil
-	} else if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// Pod already exists - don't requeue
-	reqLogger.Info("Skip reconcile: Pod already exists", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
+	//reqLogger.Info("Skip reconcile: Pod already exists", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
 	return reconcile.Result{}, nil
 }
 
-// newPodForCR returns a busybox pod with the same name/namespace as the cr
-func newPodForCR(cr *objectbucketiov1alpha1.ObjectBucketClaim) *corev1.Pod {
-	labels := map[string]string{
-		"app": cr.Name,
+// Reconcile implements the Reconciler interface. This function contains the business logic
+// of the OBC obcController.
+// Note: the obc obtained from the key is not expected to be nil. In other words, this func is
+//   not called when informers detect an object is missing and trigger a formal delete event.
+//   Instead, delete is indicated by the deletionTimestamp being non-nil on an update event.
+func (r *ReconcileObjectBucketClaim) syncHandler(obc *objectbucketiov1alpha1.ObjectBucketClaim) error {
+
+	scKey := client.ObjectKey{"", obc.Spec.StorageClassName}
+
+	storageClassInstance := &storagev1.StorageClass{}
+	err := r.client.Get(context.TODO(), scKey, storageClassInstance)
+	if err != nil {
+		log.Error(err, "storage class not found")
 	}
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      cr.Name + "-pod",
-			Namespace: cr.Namespace,
-			Labels:    labels,
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
-				},
-			},
-		},
+
+	if !r.isSupportedPlugin(storageClassInstance.Provisioner) {
+		log.Info("unsupported provisioner", "got", storageClassInstance.Provisioner)
+		return nil
 	}
+
+	// ***********************
+	// Delete or Revoke Bucket
+	// ***********************
+	if obc.ObjectMeta.DeletionTimestamp != nil {
+		log.Info("OBC deleted, proceeding with cleanup")
+		//return c.handleDeleteClaim(key, obc)
+	}
+
+	// *******************************************************
+	// Provision New Bucket or Grant Access to Existing Bucket
+	// *******************************************************
+	if !shouldProvision(obc) {
+		log.Info("skipping provision")
+		return nil
+	}
+
+	// update the OBC's status to pending before any provisioning related errors can occur
+	//obc, err = updateObjectBucketClaimPhase(
+	//	c.libClientset,
+	//	obc,
+	//	v1alpha1.ObjectBucketClaimStatusPhasePending,
+	//	defaultRetryBaseInterval,
+	//	defaultRetryTimeout)
+	//if err != nil {
+	//	return fmt.Errorf("error updating OBC status: %s", err)
+	//}
+
+	// By now, we should know that the OBC matches our provisioner, lacks an OB, and thus requires provisioning
+	//err = c.handleProvisionClaim(key, obc, class)
+	resp, err := grpcClient.Provision(context.TODO(), &cosi.ProvisionRequest{})
+	log.Info("got response", "ProvisionerResponse", *resp)
+
+	// If handleReconcile() errors, the request will be re-queued.  In the distant future, we will likely want some ignorable error types in order to skip re-queuing
+	return err
+}
+
+func (r *ReconcileObjectBucketClaim) isSupportedPlugin(name string) bool {
+	return r.pluginName == name
 }
