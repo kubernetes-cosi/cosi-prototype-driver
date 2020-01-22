@@ -4,8 +4,9 @@ import (
 	"context"
 	"github.com/yard-turkey/cosi-prototype-interface/cosi"
 	storagev1 "k8s.io/api/storage/v1"
+	"time"
 
-	objectbucketiov1alpha1 "github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
+	"github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -28,7 +29,10 @@ func Add(mgr manager.Manager) error {
 
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileObjectBucketClaim{client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	return &ReconcileObjectBucketClaim{
+		client: mgr.GetClient(),
+		scheme: mgr.GetScheme(),
+	}
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -40,7 +44,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to primary resource ObjectBucketClaim
-	err = c.Watch(&source.Kind{Type: &objectbucketiov1alpha1.ObjectBucketClaim{}}, &handler.EnqueueRequestForObject{})
+	err = c.Watch(&source.Kind{Type: &v1alpha1.ObjectBucketClaim{}}, &handler.EnqueueRequestForObject{})
 	if err != nil {
 		return err
 	}
@@ -49,7 +53,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	// Watch for changes to secondary resource Pods and requeue the owner ObjectBucketClaim
 	err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
 		IsController: true,
-		OwnerType:    &objectbucketiov1alpha1.ObjectBucketClaim{},
+		OwnerType:    &v1alpha1.ObjectBucketClaim{},
 	})
 	if err != nil {
 		return err
@@ -65,9 +69,13 @@ var _ reconcile.Reconciler = &ReconcileObjectBucketClaim{}
 type ReconcileObjectBucketClaim struct {
 	// This client, initialized using mgr.Client() above, is a split client
 	// that reads objects from the cache and writes to the apiserver
-	client client.Client
-	scheme *runtime.Scheme
+	client     client.Client
+	scheme     *runtime.Scheme
 	pluginName string
+
+	// ctx is the parent context of child timeout contexts used to regulate grpclient method
+	// calls under the Reconcile() call stack.
+	ctx context.Context
 }
 
 // Reconcile reads that state of the cluster for a ObjectBucketClaim object and makes changes based on the state read
@@ -82,7 +90,7 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 	reqLogger.Info("Reconciling ObjectBucketClaim")
 
 	// Fetch the ObjectBucketClaim instance
-	instance := &objectbucketiov1alpha1.ObjectBucketClaim{}
+	instance := &v1alpha1.ObjectBucketClaim{}
 	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -98,65 +106,94 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 	err = r.syncHandler(instance)
 
 	//reqLogger.Info("Skip reconcile: Pod already exists", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
-	return reconcile.Result{}, nil
+	return reconcile.Result{}, err
 }
+
+const requestTimeout = 30 * time.Second
 
 // Reconcile implements the Reconciler interface. This function contains the business logic
 // of the OBC obcController.
 // Note: the obc obtained from the key is not expected to be nil. In other words, this func is
 //   not called when informers detect an object is missing and trigger a formal delete event.
 //   Instead, delete is indicated by the deletionTimestamp being non-nil on an update event.
-func (r *ReconcileObjectBucketClaim) syncHandler(obc *objectbucketiov1alpha1.ObjectBucketClaim) error {
+func (r *ReconcileObjectBucketClaim) syncHandler(obc *v1alpha1.ObjectBucketClaim) error {
 
-	scKey := client.ObjectKey{"", obc.Spec.StorageClassName}
+	ctx, cancelFunc := context.WithTimeout(r.ctx, requestTimeout)
+	var _ = cancelFunc // TODO placeholder, not sure if we'll need the cancelFunc.  Probably not
+	//   as (de)provisioning isn't an async op
 
-	storageClassInstance := &storagev1.StorageClass{}
-	err := r.client.Get(context.TODO(), scKey, storageClassInstance)
+	storageClassInstance, err := r.storageClassFromClaim(obc)
 	if err != nil {
-		log.Error(err, "storage class not found")
+		return err
 	}
+	if r.isSupportedPlugin(storageClassInstance.Provisioner) {
+		// ***********************
+		// Delete or Revoke Bucket
+		// ***********************
+		if isDeletionEvent(obc) {
+			err = r.handleDeprovisionClaim(ctx, obc)
+		} else {
+			if pendingProvisioning(obc) {
+				// *******************************************************
+				// Provision New Bucket or Grant Access to Existing Bucket
+				// *******************************************************
 
-	if !r.isSupportedPlugin(storageClassInstance.Provisioner) {
-		log.Info("unsupported provisioner", "got", storageClassInstance.Provisioner)
-		return nil
+				//By now, we should know that the OBC matches our plugin, lacks an OB, and thus requires provisioning
+				err = r.handleProvisionClaim(ctx, obc)
+			} else {
+				log.Info("obc already fulfilled, skipping")
+			}
+		}
 	}
-
-	// ***********************
-	// Delete or Revoke Bucket
-	// ***********************
-	if obc.ObjectMeta.DeletionTimestamp != nil {
-		log.Info("OBC deleted, proceeding with cleanup")
-		//return c.handleDeleteClaim(key, obc)
-	}
-
-	// *******************************************************
-	// Provision New Bucket or Grant Access to Existing Bucket
-	// *******************************************************
-	if !shouldProvision(obc) {
-		log.Info("skipping provision")
-		return nil
-	}
-
-	// update the OBC's status to pending before any provisioning related errors can occur
-	//obc, err = updateObjectBucketClaimPhase(
-	//	c.libClientset,
-	//	obc,
-	//	v1alpha1.ObjectBucketClaimStatusPhasePending,
-	//	defaultRetryBaseInterval,
-	//	defaultRetryTimeout)
-	//if err != nil {
-	//	return fmt.Errorf("error updating OBC status: %s", err)
-	//}
-
-	// By now, we should know that the OBC matches our provisioner, lacks an OB, and thus requires provisioning
-	//err = c.handleProvisionClaim(key, obc, class)
-	resp, err := grpcClient.Provision(context.TODO(), &cosi.ProvisionRequest{})
-	log.Info("got response", "ProvisionerResponse", *resp)
 
 	// If handleReconcile() errors, the request will be re-queued.  In the distant future, we will likely want some ignorable error types in order to skip re-queuing
 	return err
 }
 
 func (r *ReconcileObjectBucketClaim) isSupportedPlugin(name string) bool {
-	return r.pluginName == name
+	match := r.pluginName == name
+	if ! match {
+		log.Info("this OBC is not managed by this provisioner")
+	}
+	return match
+}
+
+func (r *ReconcileObjectBucketClaim) storageClassFromClaim(obc *v1alpha1.ObjectBucketClaim) (sc *storagev1.StorageClass, err error) {
+	scKey := client.ObjectKey{"", obc.Spec.StorageClassName}
+	err = r.client.Get(context.TODO(), scKey, sc)
+	return sc, err
+}
+
+func isDeletionEvent(obc *v1alpha1.ObjectBucketClaim) bool {
+	return obc.DeletionTimestamp != nil
+}
+
+func (r *ReconcileObjectBucketClaim) handleProvisionClaim(ctx context.Context, obc *v1alpha1.ObjectBucketClaim) error {
+	log.Info("provisioning bucket")
+	resp, err := grpcClient.Provision(ctx, &cosi.ProvisionRequest{})
+	if err != nil {
+		return err
+	}
+	log.Info("provisioning succeeded", "plugin response", resp)
+	return nil
+}
+
+func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(ctx context.Context, obc *v1alpha1.ObjectBucketClaim) error {
+	log.Info("deprovisioning bucket")
+	resp, err := grpcClient.Deprovision(ctx, &cosi.DeprovisionRequest{})
+	if err != nil {
+		return err
+	}
+	log.Info("deprovisioning succeeded", "plugin response", resp)
+	return nil
+}
+
+// pendingProvisioning detects if an OB name is set on the OBC.  If so, assume provisioning already
+// already completed.
+func pendingProvisioning(obc *v1alpha1.ObjectBucketClaim) bool {
+	if obc.Spec.ObjectBucketName == "" {
+		return true
+	}
+	log.Info("provisioning completed, skipping", "ObjectBucket", obc.Spec.ObjectBucketName)
+	return false
 }

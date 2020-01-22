@@ -1,4 +1,6 @@
-package objectbucketclaim
+// +build ignore
+
+package legacy
 
 import (
 	"github.com/kube-object-storage/lib-bucket-provisioner/pkg/apis/objectbucket.io/v1alpha1"

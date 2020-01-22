@@ -1,4 +1,6 @@
-package objectbucketclaim
+// +build ignore
+
+package legacy
 
 import (
 	"fmt"

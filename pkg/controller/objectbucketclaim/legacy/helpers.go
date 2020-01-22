@@ -13,8 +13,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+// +build ignore
 
-package objectbucketclaim
+package legacy
 
 import (
 	"fmt"
@@ -30,7 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	v1alpha1 "github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
+	"github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
 )
 
 func makeObjectReference(claim *v1alpha1.ObjectBucketClaim) *corev1.ObjectReference {
@@ -57,15 +58,6 @@ func makeOwnerReference(claim *v1alpha1.ObjectBucketClaim) metav1.OwnerReference
 		BlockOwnerDeletion: &blockOwnerDeletion,
 		Controller:         &isController,
 	}
-}
-
-func shouldProvision(obc *v1alpha1.ObjectBucketClaim) bool {
-	log.Info("checking OBC for OB name, this indicates provisioning is complete", obc.Name)
-	if obc.Spec.ObjectBucketName != "" {
-		log.Info("provisioning already completed", "ObjectBucket", obc.Spec.ObjectBucketName)
-		return false
-	}
-	return true
 }
 
 // Return true if this storage class is for a new bucket vs an existing bucket.
