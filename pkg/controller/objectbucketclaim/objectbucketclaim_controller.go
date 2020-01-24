@@ -102,8 +102,11 @@ func (r *ReconcileObjectBucketClaim) resetTimeout() {
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	ResetLogger(request)
+	Log.Info("Reconciling new request")
+
 	r.resetTimeout()
 	// Fetch the ObjectBucketClaim instance
+	Debug.Info("fetching request OBC")
 	instance := &v1alpha1.ObjectBucketClaim{}
 	err := r.client.Get(r.ctx, request.NamespacedName, instance)
 	if err != nil {
@@ -111,19 +114,19 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
+			Debug.Info("OBC not found, assuming it was deleted before resources were provisioned or children were already cleaned up")
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
-	Log.Info("syncing claim")
 	err = r.syncClaim(instance)
 
-	//reqLogger.Info("Skip reconcile: Pod already exists", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
 	return reconcile.Result{}, err
 }
 
 func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) error {
+	Log.Info("syncing claim")
 	storageClassInstance, err := r.storageClassFromClaim(obc)
 	if err != nil {
 		return err
@@ -163,13 +166,11 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBu
 	// api server.
 	isFatalError := func(e error) bool { return e != nil && ! apierrs.IsAlreadyExists(e) }
 
-	Debug.Info("locking objectBucketClaim")
 	err := r.lockObject(obc)
 	if isFatalError(err) {
 		return err
 	}
 
-	Debug.Info("updating bucket phase", "phase", v1alpha1.ObjectBucketClaimStatusPhasePending)
 	err = r.setClaimPhasePending(obc)
 	if isFatalError(err) {
 		return err
@@ -208,16 +209,22 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBu
 		return err
 	}
 
-	Debug.Info("provisioning succeeded", "plugin response", resp)
+	Debug.Info("provisioning succeeded")
 	return nil
 }
 
 func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(obc *v1alpha1.ObjectBucketClaim) error {
-	Debug.Info("deprovisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
-	resp, err := grpcClient.Deprovision(r.timeoutCtx, &cosi.DeprovisionRequest{
+	Log.Info("deprovisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
+	// TODO right now we ignore the response, the prototype plugin doesn't send anything meaningful
+	_, err := grpcClient.Deprovision(r.timeoutCtx, &cosi.DeprovisionRequest{
 		BucketName: obc.Spec.BucketName,
 	})
 	if err != nil {
+		return err
+	}
+
+	err = r.deleteBoundObjectBucket(obc)
+	if err != nil && ! apierrs.IsNotFound(err) {
 		return err
 	}
 
@@ -226,7 +233,7 @@ func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(obc *v1alpha1.Object
 		return err
 	}
 
-	Debug.Info("deprovisioning succeeded", "plugin response", resp)
+	Log.Info("deprovisioning succeeded")
 	return nil
 }
 
@@ -239,6 +246,7 @@ func (r *ReconcileObjectBucketClaim) isSupportedPlugin(name string) bool {
 }
 
 func (r *ReconcileObjectBucketClaim) storageClassFromClaim(obc *v1alpha1.ObjectBucketClaim) (*storagev1.StorageClass, error) {
+	Debug.Info("fetching storage class", "name", obc.Spec.StorageClassName)
 	sc := &storagev1.StorageClass{}
 	err := r.client.Get(r.ctx, client.ObjectKey{"", obc.Spec.StorageClassName}, sc)
 	return sc, err
@@ -253,22 +261,26 @@ func (r *ReconcileObjectBucketClaim) setClaimPhaseBound(obc *v1alpha1.ObjectBuck
 }
 
 func (r *ReconcileObjectBucketClaim) setPhase(obc *v1alpha1.ObjectBucketClaim, p v1alpha1.ObjectBucketClaimStatusPhase) error {
+	Debug.Info("setting claim phase", "new phase", p)
 	obc.Status.Phase = p
 	return r.client.Update(r.ctx, obc)
 }
 
 func (r *ReconcileObjectBucketClaim) setOBCBucketName(obc *v1alpha1.ObjectBucketClaim, bucket string) error {
+	Debug.Info("setting obc.Spec.BucketName", "BucketName", obc.Spec.BucketName)
 	obc.Spec.BucketName = bucket
 	return r.client.Update(r.ctx, obc)
 }
 
 func (r *ReconcileObjectBucketClaim) setObjectBucketName(obc *v1alpha1.ObjectBucketClaim, objectBucketName string) error {
+	Debug.Info("setting obc.Spec.ObjectBucketName", "ObjectBucketName", objectBucketName)
 	obc.Spec.ObjectBucketName = objectBucketName
 	return r.client.Update(r.ctx, obc)
 }
 
 func (r *ReconcileObjectBucketClaim) createChildSecret(obc *v1alpha1.ObjectBucketClaim, accessCredentials map[string]string) (*corev1.Secret, error) {
 	sec := generateSecret(obc, accessCredentials)
+	Debug.Info("creating child secret", "Namespace", sec.Namespace, "Name", sec.Name)
 	err := controllerutil.SetControllerReference(obc, sec, r.scheme)
 	if err != nil {
 		return nil, err
@@ -279,6 +291,7 @@ func (r *ReconcileObjectBucketClaim) createChildSecret(obc *v1alpha1.ObjectBucke
 
 func (r *ReconcileObjectBucketClaim) createChildConfigMap(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionResponse) (*corev1.ConfigMap, error) {
 	cm := generateConfigMap(obc, resp)
+	Debug.Info("creating child config map", "Namespace", cm.Namespace, "Name", cm.Name)
 	// TODO push this call down in generate* calls
 	err := controllerutil.SetControllerReference(obc, cm, r.scheme)
 	if err != nil {
@@ -290,11 +303,13 @@ func (r *ReconcileObjectBucketClaim) createChildConfigMap(obc *v1alpha1.ObjectBu
 
 func (r *ReconcileObjectBucketClaim) createObjectBucket(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionResponse, reclaimPolicy *corev1.PersistentVolumeReclaimPolicy) (*v1alpha1.ObjectBucket, error) {
 	ob := generateObjectBucket(obc, resp, reclaimPolicy)
+	Debug.Info("create object bucket", "Name", ob.Name)
 	err := r.client.Create(r.ctx, ob)
 	return ob, err
 }
 
 func (r *ReconcileObjectBucketClaim) deleteBoundObjectBucket(obc *v1alpha1.ObjectBucketClaim) error {
+	Debug.Info("deleting object bucket", "Name", obc.Spec.BucketName)
 	if obc.Spec.ObjectBucketName == "" {
 		return nil
 	}
@@ -310,6 +325,7 @@ func (r *ReconcileObjectBucketClaim) deleteBoundObjectBucket(obc *v1alpha1.Objec
 const objectBucketFinalizer = "cosi.io/finalizer"
 
 func (r *ReconcileObjectBucketClaim) lockObject(obj runtime.Object) error {
+	Debug.Info("locking object")
 	err := controllerutil.AddFinalizerWithError(obj, objectBucketFinalizer)
 	if err != nil {
 		return err
@@ -318,6 +334,7 @@ func (r *ReconcileObjectBucketClaim) lockObject(obj runtime.Object) error {
 }
 
 func (r *ReconcileObjectBucketClaim) unlockObjectBucketClaim(obj runtime.Object) error {
+	Debug.Info("unlocking object")
 	err := controllerutil.RemoveFinalizerWithError(obj, objectBucketFinalizer)
 	if err != nil {
 		return err
@@ -377,6 +394,7 @@ func generateObjectBucket(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionR
 				AdditionalState: map[string]string{}, // TODO (copejon) i'm ignoring this for now
 			},
 		},
+		Status: v1alpha1.ObjectBucketStatus{Phase: v1alpha1.ObjectBucketStatusPhaseBound},
 	}
 	return ob
 }
