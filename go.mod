@@ -3,6 +3,7 @@ module github.com/yard-turkey/cosi-prototype-driver
 go 1.13
 
 require (
+	github.com/go-logr/logr v0.1.0
 	github.com/google/uuid v1.1.1
 	github.com/kube-object-storage/lib-bucket-provisioner v0.0.0-20200107223247-51020689f1fb
 	github.com/operator-framework/operator-sdk v0.14.0

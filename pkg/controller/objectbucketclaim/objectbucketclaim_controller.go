@@ -14,17 +14,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/yard-turkey/cosi-prototype-driver/pkg/apis/objectbucket/v1alpha1"
+	. "github.com/yard-turkey/cosi-prototype-driver/pkg/controller/objectbucketclaim/requestLogger"
 	"github.com/yard-turkey/cosi-prototype-interface/cosi"
 )
-
-var log = logf.Log.WithName("controller_objectbucketclaim")
-var debug = log.V(1)
 
 // Add creates a new ObjectBucketClaim Controller and adds it to the Manager. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
@@ -85,8 +82,15 @@ type ReconcileObjectBucketClaim struct {
 	// ctx is the parent context of child timeout contexts used to regulate grpclient method
 	// calls under the Reconcile() call stack.
 	ctx context.Context
-	//
+	// timeoutCtx is a continually renewed context with timout.  It expires at the end of every sync and must be reset
 	timeoutCtx context.Context
+}
+
+const requestTimeout = 30 * time.Second
+
+// TODO(copejon) resetTimeout discards the cancelFunc returned by WithTimeout.
+func (r *ReconcileObjectBucketClaim) resetTimeout() {
+	r.timeoutCtx, _ = context.WithTimeout(r.ctx, requestTimeout)
 }
 
 // Reconcile reads that state of the cluster for a ObjectBucketClaim object and makes changes based on the state read
@@ -97,9 +101,8 @@ type ReconcileObjectBucketClaim struct {
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
-	reqLogger.Info("Reconciling ObjectBucketClaim")
-
+	ResetLogger(request)
+	r.resetTimeout()
 	// Fetch the ObjectBucketClaim instance
 	instance := &v1alpha1.ObjectBucketClaim{}
 	err := r.client.Get(r.ctx, request.NamespacedName, instance)
@@ -113,23 +116,14 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
-	log.Info("DEBUG starting syncClaim")
+	Log.Info("syncing claim")
 	err = r.syncClaim(instance)
 
 	//reqLogger.Info("Skip reconcile: Pod already exists", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
 	return reconcile.Result{}, err
 }
 
-const requestTimeout = 30 * time.Second
-
 func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) error {
-
-	// timeoutCtx is a child of r.ctx. It is killed either on timeout or when cancelFunc is called.  Thus, it must be
-	// recreated every sync iteration and cannot be reused.
-	timeoutCtx, cancelFunc := context.WithTimeout(r.ctx, requestTimeout)
-	// TODO placeholder, not sure if we'll need the cancelFunc.  Probably not as (de)provisioning isn't an async op
-	var _ = cancelFunc
-
 	storageClassInstance, err := r.storageClassFromClaim(obc)
 	if err != nil {
 		return err
@@ -139,8 +133,8 @@ func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) 
 		// Delete
 		// ***********************
 		if isDeletionEvent(obc) {
-			debug.Info("processing deletion")
-			err = r.handleDeprovisionClaim(timeoutCtx, obc)
+			Debug.Info("processing deletion")
+			err = r.handleDeprovisionClaim(obc)
 		} else {
 			// Interruptions in provisioning may result in an actual state of the world where the OB was not set in the
 			// OBC but the secret and config map were created.  So we cannot short circuit syncClaim by checking
@@ -151,9 +145,9 @@ func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) 
 				// *******************************************************
 
 				//By now, we should know that the OBC matches our plugin, lacks an OB, and thus requires provisioning
-				err = r.handleProvisionClaim(timeoutCtx, obc, storageClassInstance)
+				err = r.handleProvisionClaim(obc, storageClassInstance)
 			} else {
-				log.Info("obc already fulfilled, skipping")
+				Log.Info("obc already fulfilled, skipping")
 			}
 		}
 	}
@@ -162,35 +156,35 @@ func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) 
 	return err
 }
 
-func (r *ReconcileObjectBucketClaim) handleProvisionClaim(timeoutCtx context.Context, obc *v1alpha1.ObjectBucketClaim, sc *storagev1.StorageClass) error {
+func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBucketClaim, sc *storagev1.StorageClass) error {
 
 	// Errors caused by existing resources indicates this is a retry on a partially successful sync (probably?)
 	// Name collisions are controlled because they are derived from OBCs.  An OBC name collision would be caught by the
 	// api server.
 	isFatalError := func(e error) bool { return e != nil && ! apierrs.IsAlreadyExists(e) }
 
-	debug.Info("locking objectBucketClaim")
+	Debug.Info("locking objectBucketClaim")
 	err := r.lockObject(obc)
 	if isFatalError(err) {
 		return err
 	}
 
-	debug.Info("updating bucket phase", "phase", v1alpha1.ObjectBucketClaimStatusPhasePending)
+	Debug.Info("updating bucket phase", "phase", v1alpha1.ObjectBucketClaimStatusPhasePending)
 	err = r.setClaimPhasePending(obc)
 	if isFatalError(err) {
 		return err
 	}
 
 	// TODO pass SC parameters
-	debug.Info("provisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
-	resp, err := grpcClient.Provision(timeoutCtx, &cosi.ProvisionRequest{
+	Debug.Info("provisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
+	resp, err := grpcClient.Provision(r.timeoutCtx, &cosi.ProvisionRequest{
 		RequestBucketName: obc.Spec.BucketName,
 	})
 	if isFatalError(err) {
 		return err
 	}
 
-	ob, err := r.newObjectBucket(obc, resp, sc.ReclaimPolicy)
+	ob, err := r.createObjectBucket(obc, resp, sc.ReclaimPolicy)
 	if isFatalError(err) {
 		return err
 	}
@@ -214,13 +208,13 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(timeoutCtx context.Con
 		return err
 	}
 
-	debug.Info("provisioning succeeded", "plugin response", resp)
+	Debug.Info("provisioning succeeded", "plugin response", resp)
 	return nil
 }
 
-func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(timeoutCtx context.Context, obc *v1alpha1.ObjectBucketClaim) error {
-	debug.Info("deprovisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
-	resp, err := grpcClient.Deprovision(timeoutCtx, &cosi.DeprovisionRequest{
+func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(obc *v1alpha1.ObjectBucketClaim) error {
+	Debug.Info("deprovisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
+	resp, err := grpcClient.Deprovision(r.timeoutCtx, &cosi.DeprovisionRequest{
 		BucketName: obc.Spec.BucketName,
 	})
 	if err != nil {
@@ -232,14 +226,14 @@ func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(timeoutCtx context.C
 		return err
 	}
 
-	debug.Info("deprovisioning succeeded", "plugin response", resp)
+	Debug.Info("deprovisioning succeeded", "plugin response", resp)
 	return nil
 }
 
 func (r *ReconcileObjectBucketClaim) isSupportedPlugin(name string) bool {
 	match := r.pluginName == name
 	if ! match {
-		log.Info("this OBC is not managed by this provisioner")
+		Log.Info("this OBC is not managed by this provisioner")
 	}
 	return match
 }
@@ -285,6 +279,7 @@ func (r *ReconcileObjectBucketClaim) createChildSecret(obc *v1alpha1.ObjectBucke
 
 func (r *ReconcileObjectBucketClaim) createChildConfigMap(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionResponse) (*corev1.ConfigMap, error) {
 	cm := generateConfigMap(obc, resp)
+	// TODO push this call down in generate* calls
 	err := controllerutil.SetControllerReference(obc, cm, r.scheme)
 	if err != nil {
 		return nil, err
@@ -293,10 +288,23 @@ func (r *ReconcileObjectBucketClaim) createChildConfigMap(obc *v1alpha1.ObjectBu
 	return cm, err
 }
 
-func (r *ReconcileObjectBucketClaim) newObjectBucket(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionResponse, reclaimPolicy *corev1.PersistentVolumeReclaimPolicy) (*v1alpha1.ObjectBucket, error) {
+func (r *ReconcileObjectBucketClaim) createObjectBucket(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionResponse, reclaimPolicy *corev1.PersistentVolumeReclaimPolicy) (*v1alpha1.ObjectBucket, error) {
 	ob := generateObjectBucket(obc, resp, reclaimPolicy)
 	err := r.client.Create(r.ctx, ob)
 	return ob, err
+}
+
+func (r *ReconcileObjectBucketClaim) deleteBoundObjectBucket(obc *v1alpha1.ObjectBucketClaim) error {
+	if obc.Spec.ObjectBucketName == "" {
+		return nil
+	}
+	ob := new(v1alpha1.ObjectBucket)
+	key := client.ObjectKey{"", obc.Spec.ObjectBucketName}
+	err := r.client.Get(r.ctx, key, ob)
+	if err != nil && ! apierrs.IsNotFound(err) {
+		return err
+	}
+	return r.client.Delete(r.ctx, ob)
 }
 
 const objectBucketFinalizer = "cosi.io/finalizer"
@@ -329,11 +337,15 @@ func generateConfigMap(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionResp
 	cm := new(corev1.ConfigMap)
 	cm.SetName(childResourceName(obc.Name))
 	cm.SetNamespace(obc.Namespace)
-	// TODO (copejon) I'm thinking the plugin should define the env var and the driver just pass them through
+	// TODO (copejon) I'm thinking the plugin should define the env var and the driver just pass them through.
+	// These hardcoded values are just for tire kicking the prototype
 	cm.Data = map[string]string{
 		"COSI_BUCKET_ENDPOINT": resp.Endpoint,
-		"COSI_BUCKET_REGION": resp.Region,
-		"COSI_BUCKET_NAME": resp.BucketName,
+		"COSI_BUCKET_REGION":   resp.Region,
+		"COSI_BUCKET_NAME":     resp.BucketName,
+	}
+	for k, v := range resp.Data {
+		cm.Data[k] = v
 	}
 	return cm
 }
@@ -349,18 +361,18 @@ func generateObjectBucket(obc *v1alpha1.ObjectBucketClaim, resp *cosi.ProvisionR
 		Spec: v1alpha1.ObjectBucketSpec{
 			ReclaimPolicy:    pol,
 			StorageClassName: obc.Spec.StorageClassName,
-			ClaimRef:         &corev1.ObjectReference{},
+			ClaimRef:         makeObjectReference(obc),
 			Connection: &v1alpha1.Connection{
 				Endpoint: &v1alpha1.Endpoint{
-					BucketHost: resp.Endpoint,
-					BucketPort: 0,
-					BucketName: resp.BucketName,
-					Region:     resp.Region,
+					BucketHost:           resp.Endpoint,
+					BucketPort:           0,
+					BucketName:           resp.BucketName,
+					Region:               resp.Region,
 					AdditionalConfigData: map[string]string{},
 				},
 				Authentication: &v1alpha1.Authentication{
 					AdditionalSecretData: resp.EnvironmentCredentials,
-					AccessKeys: &v1alpha1.AccessKeys{}, // TODO (copejon) should we let plugins decide the env var?
+					AccessKeys:           &v1alpha1.AccessKeys{}, // TODO (copejon) should we let plugins decide the env var?
 				},
 				AdditionalState: map[string]string{}, // TODO (copejon) i'm ignoring this for now
 			},
@@ -378,13 +390,19 @@ func childResourceName(obcName string) string {
 // pendingProvisioning detects if an OB name is set on the OBC.  If so, assume provisioning was
 // already completed.
 func pendingProvisioning(obc *v1alpha1.ObjectBucketClaim) bool {
-	if obc.Spec.ObjectBucketName == "" {
-		return true
-	}
-	log.Info("provisioning completed, skipping", "ObjectBucket", obc.Spec.ObjectBucketName)
-	return false
+	return obc.Spec.ObjectBucketName == ""
 }
 
 func isDeletionEvent(obc *v1alpha1.ObjectBucketClaim) bool {
 	return obc.DeletionTimestamp != nil
+}
+
+func makeObjectReference(obj metav1.Object) *corev1.ObjectReference {
+	return &corev1.ObjectReference{
+		APIVersion: v1alpha1.SchemeGroupVersion.String(),
+		Kind:       v1alpha1.ObjectBucketClaimGVK().Kind,
+		Name:       obj.GetName(),
+		Namespace:  obj.GetNamespace(),
+		UID:        obj.GetUID(),
+	}
 }
