@@ -1,4 +1,6 @@
-FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
+#FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
+
+FROM golang
 
 ENV OPERATOR=/usr/local/bin/cosi-prototype-driver \
     USER_UID=1001 \

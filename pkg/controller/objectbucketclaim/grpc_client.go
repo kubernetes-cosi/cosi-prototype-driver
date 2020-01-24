@@ -1,11 +1,11 @@
 package objectbucketclaim
 
 import (
-	"context"
-	"github.com/yard-turkey/cosi-prototype-interface/cosi"
-	"google.golang.org/grpc"
-	"os"
-	"time"
+"context"
+"github.com/yard-turkey/cosi-prototype-interface/cosi"
+"google.golang.org/grpc"
+"os"
+"time"
 )
 
 const (
@@ -28,9 +28,10 @@ func init() {
 	if l, ok := os.LookupEnv(ENV_LISTEN); ok {
 		listen = l
 	}
-	// TODO (copejon) I think this will work to prevent server startup races
+	// TODO (copejon) I think this will work to prevent server startup races.  Without it,
+	//  the dial may occur before the server is up, resulting in a panic.
 	ctx, _ := context.WithTimeout(context.Background(), 30 * time.Second)
-	conn, err := grpc.DialContext(ctx, listen)
+	conn, err := grpc.DialContext(ctx, listen, grpc.WithInsecure())
 	if err != nil {
 		panic(err)
 	}
