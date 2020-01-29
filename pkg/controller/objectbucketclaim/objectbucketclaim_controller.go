@@ -164,7 +164,7 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBu
 	// Errors caused by existing resources indicates this is a retry on a partially successful sync (probably?)
 	// Name collisions are controlled because they are derived from OBCs.  An OBC name collision would be caught by the
 	// api server.
-	isFatalError := func(e error) bool { return e != nil && ! apierrs.IsAlreadyExists(e) }
+	isFatalError := func(e error) bool { return e != nil && !apierrs.IsAlreadyExists(e) }
 
 	err := r.lockObject(obc)
 	if isFatalError(err) {
@@ -224,11 +224,11 @@ func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(obc *v1alpha1.Object
 	}
 
 	err = r.deleteBoundObjectBucket(obc)
-	if err != nil && ! apierrs.IsNotFound(err) {
+	if err != nil && !apierrs.IsNotFound(err) {
 		return err
 	}
 
-	err = r.unlockObjectBucketClaim(obc)
+	err = r.unlockObject(obc)
 	if err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(obc *v1alpha1.Object
 
 func (r *ReconcileObjectBucketClaim) isSupportedPlugin(name string) bool {
 	match := r.pluginName == name
-	if ! match {
+	if !match {
 		Log.Info("this OBC is not managed by this provisioner")
 	}
 	return match
@@ -316,7 +316,7 @@ func (r *ReconcileObjectBucketClaim) deleteBoundObjectBucket(obc *v1alpha1.Objec
 	ob := new(v1alpha1.ObjectBucket)
 	key := client.ObjectKey{"", obc.Spec.ObjectBucketName}
 	err := r.client.Get(r.ctx, key, ob)
-	if err != nil && ! apierrs.IsNotFound(err) {
+	if err != nil && !apierrs.IsNotFound(err) {
 		return err
 	}
 	return r.client.Delete(r.ctx, ob)
@@ -328,12 +328,14 @@ func (r *ReconcileObjectBucketClaim) lockObject(obj runtime.Object) error {
 	Debug.Info("locking object")
 	err := controllerutil.AddFinalizerWithError(obj, objectBucketFinalizer)
 	if err != nil {
-		return err
+		Log.Error(err, "obj does not implement the runtime.Object interface.  if this happened, a serious bug has"+
+			"been introduced")
+		panic(err)
 	}
 	return r.client.Update(r.ctx, obj)
 }
 
-func (r *ReconcileObjectBucketClaim) unlockObjectBucketClaim(obj runtime.Object) error {
+func (r *ReconcileObjectBucketClaim) unlockObject(obj runtime.Object) error {
 	Debug.Info("unlocking object")
 	err := controllerutil.RemoveFinalizerWithError(obj, objectBucketFinalizer)
 	if err != nil {
@@ -342,7 +344,7 @@ func (r *ReconcileObjectBucketClaim) unlockObjectBucketClaim(obj runtime.Object)
 	return r.client.Update(r.ctx, obj)
 }
 
-func generateSecret(obc *v1alpha1.ObjectBucketClaim, accessCredentials map[string]string) (*corev1.Secret) {
+func generateSecret(obc *v1alpha1.ObjectBucketClaim, accessCredentials map[string]string) *corev1.Secret {
 	sec := new(corev1.Secret)
 	sec.SetName(childResourceName(obc.Name))
 	sec.SetNamespace(obc.Namespace)

@@ -1,11 +1,11 @@
 package objectbucketclaim
 
 import (
-"context"
-"github.com/yard-turkey/cosi-prototype-interface/cosi"
-"google.golang.org/grpc"
-"os"
-"time"
+	"context"
+	"github.com/yard-turkey/cosi-prototype-interface/cosi"
+	"google.golang.org/grpc"
+	"os"
+	"time"
 )
 
 const (
@@ -18,10 +18,7 @@ const (
 // provisioner client methods.  The connection and client are instanced at
 // startup.  This gives a fail fast advantage on connection issues and
 // will result in cleaner logs for debugging the issue.
-var grpcClient = struct {
-	cosi.ProvisionerClient
-	*grpc.ClientConn
-}{}
+var grpcClient cosi.ProvisionerClient
 
 func init() {
 	listen := ENV_LISTEN_DEFAULT
@@ -30,14 +27,11 @@ func init() {
 	}
 	// TODO (copejon) I think this will work to prevent server startup races.  Without it,
 	//  the dial may occur before the server is up, resulting in a panic.
-	ctx, _ := context.WithTimeout(context.Background(), 30 * time.Second)
+	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
 	conn, err := grpc.DialContext(ctx, listen, grpc.WithInsecure())
 	if err != nil {
 		panic(err)
 	}
 
-	grpcClient = struct {
-		cosi.ProvisionerClient
-		*grpc.ClientConn
-	}{cosi.NewProvisionerClient(conn), conn}
+	grpcClient = cosi.NewProvisionerClient(conn)
 }
