@@ -3,16 +3,14 @@ package objectbucketclaim
 import (
 	"context"
 	"fmt"
-	storagev1 "k8s.io/api/storage/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"time"
-
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -29,15 +27,20 @@ func Add(mgr manager.Manager) error {
 	return add(mgr, newReconciler(mgr))
 }
 
-const pluginName = "cosi-tester" // TODO this needs to be defined in the plugin and communicated here via rpc
-
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
+	ctx := context.Background()
+	resp, err := grpcClient.GetPluginName(ctx, nil)
+	if err != nil {
+		Log.Error(err, "cannot get plugin name: %v")
+		panic(err)
+	}
+
 	return &ReconcileObjectBucketClaim{
 		client:     mgr.GetClient(),
 		scheme:     mgr.GetScheme(),
-		pluginName: pluginName,
-		ctx:        context.Background(),
+		pluginName: resp.Name,
+		ctx:        ctx,
 	}
 }
 
@@ -82,15 +85,6 @@ type ReconcileObjectBucketClaim struct {
 	// ctx is the parent context of child timeout contexts used to regulate grpclient method
 	// calls under the Reconcile() call stack.
 	ctx context.Context
-	// timeoutCtx is a continually renewed context with timout.  It expires at the end of every sync and must be reset
-	timeoutCtx context.Context
-}
-
-const requestTimeout = 30 * time.Second
-
-// TODO(copejon) resetTimeout discards the cancelFunc returned by WithTimeout.
-func (r *ReconcileObjectBucketClaim) resetTimeout() {
-	r.timeoutCtx, _ = context.WithTimeout(r.ctx, requestTimeout)
 }
 
 // Reconcile reads that state of the cluster for a ObjectBucketClaim object and makes changes based on the state read
@@ -104,7 +98,6 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 	ResetLogger(request)
 	Log.Info("Reconciling new request")
 
-	r.resetTimeout()
 	// Fetch the ObjectBucketClaim instance
 	Debug.Info("fetching request OBC")
 	instance := &v1alpha1.ObjectBucketClaim{}
@@ -178,7 +171,7 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBu
 
 	// TODO pass SC parameters
 	Debug.Info("provisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
-	resp, err := grpcClient.Provision(r.timeoutCtx, &cosi.ProvisionRequest{
+	resp, err := grpcClient.Provision(r.ctx, &cosi.ProvisionRequest{
 		RequestBucketName: obc.Spec.BucketName,
 	})
 	if isFatalError(err) {
@@ -216,7 +209,7 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBu
 func (r *ReconcileObjectBucketClaim) handleDeprovisionClaim(obc *v1alpha1.ObjectBucketClaim) error {
 	Log.Info("deprovisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
 	// TODO right now we ignore the response, the prototype plugin doesn't send anything meaningful
-	_, err := grpcClient.Deprovision(r.timeoutCtx, &cosi.DeprovisionRequest{
+	_, err := grpcClient.Deprovision(r.ctx, &cosi.DeprovisionRequest{
 		BucketName: obc.Spec.BucketName,
 	})
 	if err != nil {
