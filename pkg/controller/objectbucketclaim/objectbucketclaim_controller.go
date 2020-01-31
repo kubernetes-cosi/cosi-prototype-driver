@@ -30,11 +30,12 @@ func Add(mgr manager.Manager) error {
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 	ctx := context.Background()
-	resp, err := grpcClient.GetPluginName(ctx, nil)
+	resp, err := grpcClient.GetPluginName(ctx, &cosi.PluginNameRequest{})
 	if err != nil {
-		Log.Error(err, "cannot get plugin name: %v")
+		Log.Error(err, "cannot get plugin name")
 		panic(err)
 	}
+	Debug.Info("setting plugin provisioner: " + resp.Name)
 
 	return &ReconcileObjectBucketClaim{
 		client:     mgr.GetClient(),
@@ -58,7 +59,6 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	// TODO(user): Modify this to be the types you create that are owned by the primary resource
 	// Watch for changes to secondary resource Pods and requeue the owner ObjectBucketClaim
 	err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
 		IsController: true,
@@ -89,8 +89,6 @@ type ReconcileObjectBucketClaim struct {
 
 // Reconcile reads that state of the cluster for a ObjectBucketClaim object and makes changes based on the state read
 // and what is in the ObjectBucketClaim.Spec
-// TODO(user): Modify this Reconcile function to implement your Controller logic.  This example creates
-// a Pod as an example
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
@@ -104,9 +102,8 @@ func (r *ReconcileObjectBucketClaim) Reconcile(request reconcile.Request) (recon
 	err := r.client.Get(r.ctx, request.NamespacedName, instance)
 	if err != nil {
 		if apierrs.IsNotFound(err) {
-			// Request object not found, could have been deleted after reconcile request.
-			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
-			// Return and don't requeue
+			// If the OBC doesn't exist, it was either deleted before Provisioning began or was garbage collected after
+			// a successful deprovision.  In both cases, no further action is required.
 			Debug.Info("OBC not found, assuming it was deleted before resources were provisioned or children were already cleaned up")
 			return reconcile.Result{}, nil
 		}
@@ -125,9 +122,6 @@ func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) 
 		return err
 	}
 	if r.isSupportedPlugin(storageClassInstance.Provisioner) {
-		// ***********************
-		// Delete
-		// ***********************
 		if isDeletionEvent(obc) {
 			Debug.Info("processing deletion")
 			err = r.handleDeprovisionClaim(obc)
@@ -136,10 +130,6 @@ func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) 
 			// OBC but the secret and config map were created.  So we cannot short circuit syncClaim by checking
 			// this field earlier as deletions may still need to clean up artifacts.
 			if pendingProvisioning(obc) {
-				// *******************************************************
-				// Provision New Bucket
-				// *******************************************************
-
 				//By now, we should know that the OBC matches our plugin, lacks an OB, and thus requires provisioning
 				err = r.handleProvisionClaim(obc, storageClassInstance)
 			} else {
@@ -148,7 +138,6 @@ func (r *ReconcileObjectBucketClaim) syncClaim(obc *v1alpha1.ObjectBucketClaim) 
 		}
 	}
 
-	// If handleReconcile() errors, the request will be re-queued.  In the distant future, we will likely want some ignorable error types in order to skip re-queuing
 	return err
 }
 
@@ -169,10 +158,10 @@ func (r *ReconcileObjectBucketClaim) handleProvisionClaim(obc *v1alpha1.ObjectBu
 		return err
 	}
 
-	// TODO pass SC parameters
 	Debug.Info("provisioning bucket", "OBC", fmt.Sprintf("%s/%s", obc.Namespace, obc.Name))
 	resp, err := grpcClient.Provision(r.ctx, &cosi.ProvisionRequest{
 		RequestBucketName: obc.Spec.BucketName,
+		Parameters:        getClassParameters(sc),
 	})
 	if isFatalError(err) {
 		return err
@@ -418,4 +407,13 @@ func makeObjectReference(obj metav1.Object) *corev1.ObjectReference {
 		Namespace:  obj.GetNamespace(),
 		UID:        obj.GetUID(),
 	}
+}
+
+// getClassParameters protects against uninitialized field access
+func getClassParameters(sc *storagev1.StorageClass) map[string]string {
+	Debug.Info(fmt.Sprintf("getting StorageClass parameters: %v", *sc)) //TODO check to see if the parameters would cause a nil error
+	if sc.Parameters != nil {
+		return sc.Parameters
+	}
+	return make(map[string]string)
 }
