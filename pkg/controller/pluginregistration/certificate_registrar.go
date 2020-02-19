@@ -140,7 +140,7 @@ func newSerializedKey(privateKey *rsa.PrivateKey) []byte {
 	})
 }
 
-func (cr *certificateRegistrar) newTLSSecret(name, ns string, key, cert []byte) *corev1.Secret {
+func (cr *certificateRegistrar) newTLSSecret(name, ns string, cert, key []byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -154,7 +154,6 @@ func (cr *certificateRegistrar) newTLSSecret(name, ns string, key, cert []byte) 
 	}
 }
 
-// STUB
 func (cr *certificateRegistrar) revoke() error {
 	sec := &corev1.Secret{}
 	err := cr.client.Get(cr.ctx, objectKeyFromSecretRef(cr.registration.Status.CertSecret), sec)
