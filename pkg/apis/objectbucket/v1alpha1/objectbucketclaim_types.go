@@ -30,8 +30,9 @@ func ObjectBucketClaimGVK() schema.GroupVersionKind {
 // ObjectBucketClaimSpec defines the desired state of ObjectBucketClaim
 type ObjectBucketClaimSpec struct {
 
-	// StorageClass names the StorageClass object representing the desired provisioner and parameters
-	StorageClassName string `json:"storageClassName"`
+	// BucketClass names the BucketClass object indirectly declares the desired plugin and parameters
+	BucketClassName      string `json:"storageClassName"`
+	BucketClassNamespace string `json:"bucketClassNamespace"`
 
 	// BucketName (not recommended) the name of the bucket.  Caution!
 	// In-store bucket names may collide across namespaces.  If you define
@@ -52,7 +53,7 @@ type ObjectBucketClaimSpec struct {
 
 	// ObjectBucketName is the name of the object bucket resource.  This is the authoritative
 	// determintaion for binding.
-	ObjectBucketName string
+	ObjectBucketName string `json:"objectBucketName"`
 }
 
 // ObjectBucketClaimStatusPhase is set by the controller to save the state of the provisioning process.

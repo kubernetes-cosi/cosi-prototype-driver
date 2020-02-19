@@ -1,0 +1,7 @@
+apiVersion: objectbucket.io/v1alpha1
+kind: PluginRegistration
+metadata:
+  name: example-pluginregistration
+spec:
+  pluginName: "example-plugin"
+  host: "localhost:8080"

@@ -1,0 +1,7 @@
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: example-objectbucket
+spec:
+  # Add fields here
+  size: 3

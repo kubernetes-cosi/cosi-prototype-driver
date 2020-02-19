@@ -28,10 +28,6 @@ func ObjectBucketGVK() schema.GroupVersionKind {
 	return GroupKindVersion(ObjectBucketKind)
 }
 
-type mapper interface {
-	toMap() map[string]string
-}
-
 // Exported constants used by provisioners: including conventional
 // environment variable names for S3 Access and Secret Key, and
 // map key names. Eg. key to access a bucket name in a storage class
@@ -51,31 +47,11 @@ type AccessKeys struct {
 	SecretAccessKey string `json:"-"`
 }
 
-var _ mapper = &AccessKeys{}
-
-func (ak *AccessKeys) toMap() map[string]string {
-	return map[string]string{
-		AwsKeyField:    ak.AccessKeyID,
-		AwsSecretField: ak.SecretAccessKey,
-	}
-}
-
 // Authentication wraps all supported auth types.  The design choice enables expansion of supported types while
 // protecting backwards compatibility.
 type Authentication struct {
 	AccessKeys           *AccessKeys       `json:"-"`
 	AdditionalSecretData map[string]string `json:"-"`
-}
-
-// ToMap converts the any defined authentication type into a map[string]string for writing to a Secret.StringData field
-func (a *Authentication) ToMap() map[string]string {
-	if a == nil {
-		return map[string]string{}
-	}
-	if a.AccessKeys != nil {
-		return a.AccessKeys.toMap()
-	}
-	return map[string]string{}
 }
 
 // Endpoint contains all connection relevant data that an app may require for accessing
@@ -98,13 +74,26 @@ type Connection struct {
 	AdditionalState map[string]string `json:"additionalState"`
 }
 
+// ObjectBucketReleasePolicy describes cleanup actions to be taken when an OB is deleted.
+type ObjectBucketReleasePolicy string
+
+const (
+	// ObjectBucketReleasePolicyDelete signifies that the bucket should be destroyed when the OB is deleted
+	ObjectBucketReleasePolicyDelete ObjectBucketReleasePolicy = "delete"
+
+	// ObjectBucketReleasePolicyRelease signifies that access to the bucket should be revoked and that data
+	// within the bucket should be retained.
+	ObjectBucketReleasePolicyRelease ObjectBucketReleasePolicy = "release"
+)
+
 // ObjectBucketSpec defines the desired state of ObjectBucket. Fields defined here should be normal among all providers.
 // Authentication must be of a type defined in this package to pass type checks in reconciler
 type ObjectBucketSpec struct {
-	StorageClassName string                                `json:"storageClassName"`
-	ReclaimPolicy    *corev1.PersistentVolumeReclaimPolicy `json:"reclaimPolicy"`
-	ClaimRef         *corev1.ObjectReference               `json:"claimRef"`
-	*Connection      `json:",inline"`
+	BucketClassName      string                     `json:"bucketClassName"`
+	BucketClassNamespace string                     `json:"bucketClassNamespace"`
+	ReleasePolicy        *ObjectBucketReleasePolicy `json:"releasePolicy"`
+	ClaimRef             *corev1.ObjectReference    `json:"claimRef"`
+	*Connection          `json:",inline"`
 }
 
 // ObjectBucketStatusPhase is set by the controller to save the state of the provisioning process.
@@ -127,7 +116,7 @@ const (
 
 // ObjectBucketStatus defines the observed state of ObjectBucket
 type ObjectBucketStatus struct {
-	Phase      ObjectBucketStatusPhase `json:"phase"`
+	Phase ObjectBucketStatusPhase `json:"phase"`
 }
 
 // +genclient

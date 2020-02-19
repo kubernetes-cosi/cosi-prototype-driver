@@ -73,6 +73,9 @@ rules:
   - objectbuckets
   - objectbucketclaims
   - foos
+  - provisionerregistrations
+  - bucketclasses
+  - pluginregistrations
   verbs:
   - create
   - delete
@@ -87,6 +90,30 @@ rules:
   - '*'
   - objectbucketclaims
   - objectbuckets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cosi.io
+  resources:
+  - '*'
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bar.io
+  resources:
+  - '*'
   verbs:
   - create
   - delete

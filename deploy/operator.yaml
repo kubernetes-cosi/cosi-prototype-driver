@@ -1,24 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cosi-prototype-driver
+  name: cosi-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      name: cosi-prototype-driver
+      name: cosi-controller
   template:
     metadata:
       labels:
-        name: cosi-prototype-driver
+        name: cosi-controller
     spec:
       serviceAccountName: cosi-prototype-driver
       containers:
-        - name: cosi-prototype-driver
+        - name: cosi-controller
           # Replace this with the built image name
-          image: jcoperh/cosi
+          image: cosi.io/controller
           command:
           - cosi-prototype-driver
+          args:
+          - '--zap-devel'
           imagePullPolicy: Never
           env:
             - name: WATCH_NAMESPACE
@@ -30,4 +32,4 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OPERATOR_NAME
-              value: "cosi-prototype-driver"
+              value: "cosi-controller"

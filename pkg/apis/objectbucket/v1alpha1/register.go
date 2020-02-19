@@ -58,6 +58,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ObjectBucketClaimList{},
 		&ObjectBucket{},
 		&ObjectBucketList{},
+		&BucketClass{},
+		&BucketClassList{},
+		&PluginRegistration{},
+		&PluginRegistrationList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
